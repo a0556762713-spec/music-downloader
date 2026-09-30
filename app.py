@@ -1,20 +1,21 @@
 import os
 import re
+import traceback
+import glob
 from flask import Flask, request, render_template_string, send_file
 import yt_dlp
 
-# התקנת והפעלת FFmpeg להמרה ל-MP3
+# ניסיון להפעיל את FFmpeg אם קיים
 try:
     import static_ffmpeg
     static_ffmpeg.add_paths()
-except Exception:
-    pass
+except Exception as e:
+    print(f"Warning: static_ffmpeg not loaded: {e}")
 
 app = Flask(__name__)
-DOWNLOAD_FOLDER = "downloads"
+DOWNLOAD_FOLDER = os.path.abspath("downloads")
 os.makedirs(DOWNLOAD_FOLDER, exist_ok=True)
 
-# תבנית האתר עם השם "דביר מיוזיק" והעיצוב המבוקש
 HTML_PAGE = """
 <!DOCTYPE html>
 <html lang="he" dir="rtl">
@@ -59,13 +60,39 @@ HTML_PAGE = """
                 <h4>{{ song.title }}</h4>
                 <p>{{ song.artist }}</p>
                 <a href="/download?id={{ song.id }}&title={{ song.url_title }}" class="download-btn">
-                    ⬇ הורד MP3 למחשב
+                    ⬇ הורד שיר למחשב
                 </a>
             </div>
         {% endfor %}
     </div>
 </div>
 
+</body>
+</html>
+"""
+
+ERROR_TEMPLATE = """
+<!DOCTYPE html>
+<html lang="he" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <title>שגיאה בהורדה</title>
+    <style>
+        body { font-family: sans-serif; background-color: #fce8e6; padding: 30px; direction: rtl; }
+        .box { background: white; padding: 25px; border-radius: 10px; max-width: 800px; margin: auto; box-shadow: 0 4px 10px rgba(0,0,0,0.1); }
+        h2 { color: #d93025; }
+        pre { background: #2d2d2d; color: #f8f8f2; padding: 15px; border-radius: 6px; overflow-x: auto; direction: ltr; text-align: left; font-size: 13px; }
+        a { display: inline-block; margin-top: 15px; background: #007bff; color: white; padding: 10px 20px; border-radius: 5px; text-decoration: none; }
+    </style>
+</head>
+<body>
+    <div class="box">
+        <h2>❌ אירעה שגיאה בעת ניסיון ההורדה מיוטיוב</h2>
+        <p>להלן פירוט השגיאה המדויק מהשרת:</p>
+        <pre>{{ error_details }}</pre>
+        <br>
+        <a href="/">חזרה לעמוד הראשי</a>
+    </div>
 </body>
 </html>
 """
@@ -114,33 +141,44 @@ def download():
     video_id = request.args.get('id')
     title = request.args.get('title', 'song')
     if not video_id:
-        return "חסר מזהה סרטון", 400
+        return "חסר מזהה סרטון (Video ID)", 400
 
-    out_file = os.path.join(DOWNLOAD_FOLDER, f"{video_id}.mp3")
-    
-    if not os.path.exists(out_file):
-        ydl_opts = {
-            'format': 'bestaudio/best',
-            'outtmpl': os.path.join(DOWNLOAD_FOLDER, f"{video_id}.%(ext)s"),
-            'postprocessors': [{
-                'key': 'FFmpegExtractAudio',
-                'preferredcodec': 'mp3',
-                'preferredquality': '192',
-            }],
-            'quiet': True,
-            'no_warnings': True,
-        }
+    clean_title = re.sub(r'[^\w\s\d\-_~.-]', '', title) or 'song'
+    url = f"https://www.youtube.com/watch?v={video_id}"
+
+    # בדיקה אם הקובץ כבר הורד בעבר
+    existing_files = glob.glob(os.path.join(DOWNLOAD_FOLDER, f"{video_id}.*"))
+    if existing_files:
+        filepath = existing_files[0]
+        ext = filepath.rsplit('.', 1)[-1]
+        return send_file(filepath, as_attachment=True, download_name=f"{clean_title}.{ext}")
+
+    ydl_opts = {
+        'format': 'bestaudio/best',
+        'outtmpl': os.path.join(DOWNLOAD_FOLDER, f"{video_id}.%(ext)s"),
+        'nocheckcertificate': True,
+        'noplaylist': True,
+        'quiet': True,
+        'no_warnings': True,
+    }
+
+    try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            ydl.download([f"https://www.youtube.com/watch?v={video_id}"])
+            ydl.download([url])
 
-    if os.path.exists(out_file):
-        return send_file(
-            out_file,
-            as_attachment=True,
-            download_name=f"{title}.mp3",
-            mimetype="audio/mpeg"
-        )
-    return "שגיאה בהורדת הקובץ", 500
+        # חיפוש הקובץ שירד בפועל
+        downloaded = glob.glob(os.path.join(DOWNLOAD_FOLDER, f"{video_id}.*"))
+        if downloaded:
+            filepath = downloaded[0]
+            ext = filepath.rsplit('.', 1)[-1]
+            return send_file(filepath, as_attachment=True, download_name=f"{clean_title}.{ext}")
+        else:
+            raise Exception("ההורדה הסתיימה אך הקובץ לא נמצא בתיקיית downloads.")
+
+    except Exception as e:
+        full_error = traceback.format_exc()
+        print(full_error)
+        return render_template_string(ERROR_TEMPLATE, error_details=full_error), 500
 
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 7860))
