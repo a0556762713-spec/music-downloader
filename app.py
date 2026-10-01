@@ -1,12 +1,9 @@
 import os
 import re
-import glob
 import traceback
 import requests
 
-from datetime import datetime, timezone
-from flask import Flask, request, render_template_string, send_file
-import yt_dlp
+from flask import Flask, request, render_template_string
 
 
 # ============================================================
@@ -15,431 +12,46 @@ import yt_dlp
 
 app = Flask(__name__)
 
-
-# ============================================================
-# FFMPEG
-# ============================================================
-
-try:
-    import static_ffmpeg
-    static_ffmpeg.add_paths()
-    print("FFmpeg loaded successfully")
-except Exception as e:
-    print("Warning: static_ffmpeg not loaded:", e)
-
-
-# ============================================================
-# SETTINGS
-# ============================================================
-
-DOWNLOAD_FOLDER = os.path.abspath("downloads")
-os.makedirs(DOWNLOAD_FOLDER, exist_ok=True)
-
-ERROR_SERVER_URL = "https://merkazia-plus.wuaze.com/wer.php"
-
 PORT = int(os.environ.get("PORT", 10000))
 
+# כתובת פנימית של שירות ההורדה.
+# ב-Render נגדיר אותה כמשתנה סביבה.
+WORKER_URL = os.environ.get(
+    "WORKER_URL",
+    "http://localhost:10001"
+).rstrip("/")
+
 
 # ============================================================
-# STARTUP INFO
+# STARTUP
 # ============================================================
 
 print("=" * 60)
-print("SERVER STARTING")
+print("MUSIC DOWNLOADER - WEB SERVER")
 print("=" * 60)
 print("PORT:", PORT)
-print("ERROR SERVER:", ERROR_SERVER_URL)
-print("DOWNLOAD FOLDER:", DOWNLOAD_FOLDER)
-
-try:
-    print("yt-dlp version:", yt_dlp.version.__version__)
-except Exception:
-    print("yt-dlp version: unknown")
-
+print("WORKER URL:", WORKER_URL)
 print("=" * 60)
 
 
 # ============================================================
-# SEND ERROR TO PHP SERVER
-# ============================================================
-
-def send_error_to_remote_server(
-    event,
-    error_text,
-    video_id="",
-    youtube_url="",
-    title="",
-    extra=None
-):
-    """
-    שולח את פרטי השגיאה לשרת PHP.
-    אין מפתח ואין אימות מיוחד.
-    """
-
-    try:
-        payload = {
-            "time": datetime.now(timezone.utc).isoformat(),
-            "timestamp": int(datetime.now(timezone.utc).timestamp()),
-
-            "event": event,
-
-            "video_id": video_id,
-            "youtube_url": youtube_url,
-            "title": title,
-
-            "error": str(error_text),
-
-            "traceback": traceback.format_exc(),
-
-            "server": "Render",
-            "extra": extra or {}
-        }
-
-        response = requests.post(
-            ERROR_SERVER_URL,
-            json=payload,
-            timeout=10,
-            headers={
-                "Content-Type": "application/json",
-                "User-Agent": "MusicDownloader/1.0"
-            }
-        )
-
-        print("ERROR SERVER RESPONSE:", response.status_code)
-
-    except Exception as report_error:
-        print("Could not send error to PHP server:")
-        print(report_error)
-
-
-# ============================================================
-# HEBREW ERROR TRANSLATION
-# ============================================================
-
-def translate_error_to_hebrew(error_text):
-    """
-    הופך שגיאות נפוצות של yt-dlp להסבר ברור בעברית.
-    """
-
-    text = str(error_text)
-    lower = text.lower()
-
-    # --------------------------------------------------------
-    # YouTube BOT / LOGIN
-    # --------------------------------------------------------
-
-    if (
-        "sign in to confirm" in lower
-        or "you're not a bot" in lower
-        or "you’re not a bot" in lower
-        or "confirm you're not a bot" in lower
-    ):
-        return (
-            "YouTube חסם את ניסיון ההורדה וביקש אימות שהשרת אינו רובוט.\n\n"
-            "הבעיה אינה בקובץ או ב־FFmpeg. "
-            "YouTube מזהה את השרת של Render ומבקש אימות נוסף.\n\n"
-            "המערכת ניסתה להשתמש בלקוח חלופי של YouTube, "
-            "אבל YouTube עדיין עלול לחסום הורדות מהשרת."
-        )
-
-    # --------------------------------------------------------
-    # PRIVATE
-    # --------------------------------------------------------
-
-    if "private video" in lower:
-        return (
-            "הסרטון פרטי ולכן לא ניתן להוריד אותו."
-        )
-
-    # --------------------------------------------------------
-    # REMOVED
-    # --------------------------------------------------------
-
-    if (
-        "video unavailable" in lower
-        or "video removed" in lower
-        or "not found" in lower
-    ):
-        return (
-            "הסרטון אינו זמין כרגע.\n"
-            "ייתכן שהוא נמחק, הוסר או שהקישור אינו תקין."
-        )
-
-    # --------------------------------------------------------
-    # REGION
-    # --------------------------------------------------------
-
-    if (
-        "not available in your country" in lower
-        or "not available in your region" in lower
-        or "country" in lower and "available" in lower
-    ):
-        return (
-            "הסרטון אינו זמין באזור שבו נמצא שרת ההורדה."
-        )
-
-    # --------------------------------------------------------
-    # 403
-    # --------------------------------------------------------
-
-    if "403" in lower or "forbidden" in lower:
-        return (
-            "YouTube דחה את בקשת השרת (HTTP 403).\n\n"
-            "ייתכן שהבקשה נחסמה בגלל הגבלות של YouTube "
-            "או בגלל אימות של השרת."
-        )
-
-    # --------------------------------------------------------
-    # 404
-    # --------------------------------------------------------
-
-    if "404" in lower:
-        return (
-            "הסרטון לא נמצא (HTTP 404).\n"
-            "ייתכן שהקישור אינו תקין או שהסרטון הוסר."
-        )
-
-    # --------------------------------------------------------
-    # 429
-    # --------------------------------------------------------
-
-    if "429" in lower or "too many requests" in lower:
-        return (
-            "YouTube קיבל יותר מדי בקשות מהשרת בזמן קצר.\n\n"
-            "יש להמתין לפני ניסיון הורדה נוסף."
-        )
-
-    # --------------------------------------------------------
-    # LOGIN
-    # --------------------------------------------------------
-
-    if (
-        "login required" in lower
-        or "sign in" in lower
-        or "authentication" in lower
-    ):
-        return (
-            "YouTube דורש התחברות או אימות כדי לאפשר את ההורדה."
-        )
-
-    # --------------------------------------------------------
-    # AGE
-    # --------------------------------------------------------
-
-    if (
-        "age-restricted" in lower
-        or "age restricted" in lower
-    ):
-        return (
-            "הסרטון מוגבל לפי גיל ולכן YouTube דורש אימות משתמש."
-        )
-
-    # --------------------------------------------------------
-    # FORMAT
-    # --------------------------------------------------------
-
-    if (
-        "requested format is not available" in lower
-        or "format is not available" in lower
-    ):
-        return (
-            "YouTube לא סיפק פורמט מתאים להורדה עבור הסרטון הזה."
-        )
-
-    # --------------------------------------------------------
-    # FFMPEG
-    # --------------------------------------------------------
-
-    if "ffmpeg" in lower:
-        return (
-            "אירעה בעיה בעיבוד קובץ המדיה באמצעות FFmpeg.\n\n"
-            "יש לבדוק ש־FFmpeg נטען בהצלחה בשרת."
-        )
-
-    # --------------------------------------------------------
-    # NETWORK
-    # --------------------------------------------------------
-
-    if (
-        "timed out" in lower
-        or "timeout" in lower
-        or "connection reset" in lower
-        or "connection refused" in lower
-        or "network" in lower
-    ):
-        return (
-            "השרת לא הצליח להשלים את החיבור ל־YouTube.\n"
-            "ייתכן שמדובר בבעיה זמנית ברשת או בחסימה מצד YouTube."
-        )
-
-    # --------------------------------------------------------
-    # CAPTCHA
-    # --------------------------------------------------------
-
-    if (
-        "captcha" in lower
-        or "verify you are human" in lower
-        or "verification" in lower
-    ):
-        return (
-            "YouTube דורש אימות אנושי לפני שניתן להמשיך בהורדה."
-        )
-
-    # --------------------------------------------------------
-    # UNSUPPORTED URL
-    # --------------------------------------------------------
-
-    if "unsupported url" in lower:
-        return (
-            "הקישור שסופק אינו נתמך על ידי מערכת ההורדה."
-        )
-
-    # --------------------------------------------------------
-    # PO TOKEN
-    # --------------------------------------------------------
-
-    if (
-        "po token" in lower
-        or "potoken" in lower
-    ):
-        return (
-            "YouTube דורש PO Token עבור בקשת ההורדה.\n\n"
-            "זהו מנגנון אימות של YouTube מול תוכנות הורדה."
-        )
-
-    # --------------------------------------------------------
-    # GENERIC
-    # --------------------------------------------------------
-
-    return (
-        "אירעה שגיאה בזמן ניסיון ההורדה מ־YouTube.\n\n"
-        "המערכת לא הצליחה לזהות את סוג השגיאה באופן אוטומטי."
-    )
-
-
-# ============================================================
-# CLEAN TITLE
-# ============================================================
-
-def clean_filename(name):
-    """
-    מנקה שם קובץ מתווים בעייתיים.
-    """
-
-    name = str(name)
-
-    name = re.sub(
-        r'[<>:"/\\|?*\x00-\x1F]',
-        '',
-        name
-    )
-
-    name = re.sub(
-        r'\s+',
-        ' ',
-        name
-    ).strip()
-
-    if not name:
-        name = "song"
-
-    return name[:180]
-
-
-# ============================================================
-# SEARCH YOUTUBE
+# SEARCH
 # ============================================================
 
 def search_youtube(query):
 
     try:
+        response = requests.get(
+            f"{WORKER_URL}/search",
+            params={"q": query},
+            timeout=60
+        )
 
-        query = query.strip()
+        response.raise_for_status()
 
-        if not query:
-            return []
+        data = response.json()
 
-        # אם המשתמש הכניס קישור ישיר
-        if re.match(
-            r'https?://(www\.)?(youtube\.com|youtu\.be)/',
-            query,
-            re.IGNORECASE
-        ):
-            search_query = query
-        else:
-            search_query = "ytsearch8:" + query
-
-        ydl_opts = {
-            "quiet": True,
-            "no_warnings": True,
-
-            "extract_flat": True,
-
-            "skip_download": True,
-
-            "noplaylist": True,
-
-            "nocheckcertificate": True,
-
-            # לקוח חלופי
-            "extractor_args": {
-                "youtube": {
-                    "player_client": [
-                        "web_safari"
-                    ]
-                }
-            }
-        }
-
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-
-            info = ydl.extract_info(
-                search_query,
-                download=False
-            )
-
-        results = []
-
-        if not info:
-            return results
-
-        entries = info.get("entries", [])
-
-        for entry in entries:
-
-            if not entry:
-                continue
-
-            video_id = entry.get("id")
-
-            if not video_id:
-                continue
-
-            title = (
-                entry.get("title")
-                or "ללא כותרת"
-            )
-
-            channel = (
-                entry.get("channel")
-                or entry.get("uploader")
-                or ""
-            )
-
-            thumbnail = (
-                entry.get("thumbnail")
-                or f"https://i.ytimg.com/vi/{video_id}/hqdefault.jpg"
-            )
-
-            results.append({
-                "id": video_id,
-                "title": title,
-                "artist": channel,
-                "thumbnail": thumbnail,
-                "url": f"https://www.youtube.com/watch?v={video_id}"
-            })
-
-        return results
+        return data.get("results", [])
 
     except Exception as e:
 
@@ -449,19 +61,11 @@ def search_youtube(query):
 
         traceback.print_exc()
 
-        send_error_to_remote_server(
-            event="youtube_search",
-            error_text=str(e),
-            extra={
-                "query": query
-            }
-        )
-
         return []
 
 
 # ============================================================
-# MAIN PAGE
+# HTML
 # ============================================================
 
 HTML_PAGE = r"""
@@ -486,12 +90,14 @@ HTML_PAGE = r"""
 body {
     margin: 0;
     font-family: Arial, sans-serif;
+
     background:
         linear-gradient(
             135deg,
             #111827,
             #1f2937
         );
+
     color: white;
     min-height: 100vh;
 }
@@ -525,20 +131,28 @@ body {
 
 .search-box input {
     flex: 1;
+
     padding: 17px;
+
     border-radius: 12px;
     border: none;
+
     font-size: 17px;
+
     direction: rtl;
 }
 
 .search-box button {
     padding: 17px 30px;
+
     border: none;
     border-radius: 12px;
+
     cursor: pointer;
+
     background: #ef4444;
     color: white;
+
     font-size: 17px;
     font-weight: bold;
 }
@@ -554,18 +168,26 @@ body {
 
 .card {
     background: rgba(255,255,255,0.08);
+
     border: 1px solid rgba(255,255,255,0.1);
+
     border-radius: 16px;
+
     padding: 15px;
+
     display: flex;
+
     gap: 18px;
+
     align-items: center;
 }
 
 .card img {
     width: 190px;
     height: 108px;
+
     object-fit: cover;
+
     border-radius: 10px;
 }
 
@@ -576,21 +198,29 @@ body {
 .card-title {
     font-size: 20px;
     font-weight: bold;
+
     margin-bottom: 8px;
 }
 
 .artist {
     color: #cbd5e1;
+
     margin-bottom: 15px;
 }
 
 .download {
     display: inline-block;
+
     background: #22c55e;
+
     color: white;
+
     text-decoration: none;
+
     padding: 11px 20px;
+
     border-radius: 9px;
+
     font-weight: bold;
 }
 
@@ -600,8 +230,24 @@ body {
 
 .empty {
     text-align: center;
+
     color: #cbd5e1;
+
     padding: 40px;
+}
+
+.error {
+    background: #7f1d1d;
+
+    border: 1px solid #ef4444;
+
+    padding: 20px;
+
+    border-radius: 12px;
+
+    white-space: pre-line;
+
+    line-height: 1.7;
 }
 
 @media (max-width: 650px) {
@@ -612,17 +258,20 @@ body {
 
     .card {
         flex-direction: column;
+
         align-items: stretch;
     }
 
     .card img {
         width: 100%;
+
         height: auto;
     }
 
     .header h1 {
         font-size: 30px;
     }
+
 }
 
 </style>
@@ -665,7 +314,18 @@ body {
     </form>
 
 
-    {% if query and not results %}
+    {% if error_message %}
+
+        <div class="error">
+            {{ error_message }}
+        </div>
+
+        <br>
+
+    {% endif %}
+
+
+    {% if query and not results and not error_message %}
 
         <div class="empty">
 
@@ -746,20 +406,27 @@ ERROR_TEMPLATE = r"""
 body {
     margin: 0;
     padding: 30px;
+
     background: #111827;
+
     color: white;
+
     font-family: Arial, sans-serif;
 }
 
 .container {
     max-width: 850px;
+
     margin: 40px auto;
 }
 
 .box {
     background: #1f2937;
+
     border-radius: 18px;
+
     padding: 30px;
+
     border: 1px solid #374151;
 }
 
@@ -769,46 +436,37 @@ h1 {
 
 .message {
     white-space: pre-line;
+
     background: #111827;
+
     padding: 20px;
+
     border-radius: 12px;
+
     line-height: 1.8;
+
     font-size: 18px;
 }
 
 .code {
     margin-top: 20px;
+
     color: #9ca3af;
-}
-
-details {
-    margin-top: 25px;
-}
-
-summary {
-    cursor: pointer;
-    color: #93c5fd;
-    font-weight: bold;
-}
-
-pre {
-    direction: ltr;
-    text-align: left;
-    white-space: pre-wrap;
-    background: #030712;
-    color: #d1d5db;
-    padding: 20px;
-    border-radius: 10px;
-    overflow-x: auto;
 }
 
 .back {
     display: inline-block;
+
     margin-top: 25px;
+
     padding: 13px 22px;
+
     background: #3b82f6;
+
     color: white;
+
     text-decoration: none;
+
     border-radius: 10px;
 }
 
@@ -831,20 +489,6 @@ pre {
 <div class="code">
 קוד שגיאה: {{ error_code }}
 </div>
-
-{% if raw_error %}
-
-<details>
-
-<summary>
-🔧 פרטי השגיאה הטכניים מהשרת
-</summary>
-
-<pre>{{ raw_error }}</pre>
-
-</details>
-
-{% endif %}
 
 <a
     class="back"
@@ -877,13 +521,32 @@ def home():
 
     results = []
 
+    error_message = ""
+
     if query:
-        results = search_youtube(query)
+
+        try:
+
+            results = search_youtube(query)
+
+            if not results:
+                error_message = (
+                    "לא נמצאו תוצאות או שהחיפוש "
+                    "לא הצליח כרגע."
+                )
+
+        except Exception as e:
+
+            error_message = str(e)
 
     return render_template_string(
         HTML_PAGE,
+
         query=query,
-        results=results
+
+        results=results,
+
+        error_message=error_message
     )
 
 
@@ -904,239 +567,207 @@ def download():
         "song"
     ).strip()
 
+
     if not video_id:
 
         return render_template_string(
             ERROR_TEMPLATE,
-            error_message="לא סופק מזהה של הסרטון.",
-            raw_error="Missing video ID",
+
+            error_message=(
+                "לא סופק מזהה של הסרטון."
+            ),
+
             error_code="MISSING-ID"
+
         ), 400
 
-
-    youtube_url = (
-        "https://www.youtube.com/watch?v="
-        + video_id
-    )
-
-
-    # --------------------------------------------------------
-    # בדיקת קבצים קיימים
-    # --------------------------------------------------------
-
-    existing_files = glob.glob(
-        os.path.join(
-            DOWNLOAD_FOLDER,
-            video_id + ".*"
-        )
-    )
-
-    if existing_files:
-
-        existing_file = existing_files[0]
-
-        try:
-
-            return send_file(
-                existing_file,
-                as_attachment=True,
-                download_name=(
-                    clean_filename(title)
-                    + os.path.splitext(existing_file)[1]
-                )
-            )
-
-        except Exception as e:
-
-            print("=" * 60)
-            print("EXISTING FILE SEND ERROR")
-            print("=" * 60)
-
-            traceback.print_exc()
-
-            send_error_to_remote_server(
-                event="send_existing_file",
-                error_text=str(e),
-                video_id=video_id,
-                youtube_url=youtube_url,
-                title=title
-            )
-
-            return render_template_string(
-                ERROR_TEMPLATE,
-                error_message=translate_error_to_hebrew(e),
-                raw_error=str(e),
-                error_code="SEND-FILE"
-            ), 500
-
-
-    # --------------------------------------------------------
-    # שם קובץ
-    # --------------------------------------------------------
-
-    output_template = os.path.join(
-        DOWNLOAD_FOLDER,
-        video_id + ".%(ext)s"
-    )
-
-
-    # --------------------------------------------------------
-    # yt-dlp options
-    # --------------------------------------------------------
-
-    ydl_opts = {
-
-        # אודיו / פורמט איכותי
-        "format": "bestaudio/best",
-
-        "outtmpl": output_template,
-
-        "noplaylist": True,
-
-        "quiet": False,
-
-        "no_warnings": False,
-
-        "nocheckcertificate": True,
-
-        "retries": 2,
-
-        "fragment_retries": 2,
-
-        "socket_timeout": 30,
-
-        "continuedl": True,
-
-        # ניסיון עם לקוח YouTube חלופי
-        "extractor_args": {
-            "youtube": {
-                "player_client": [
-                    "web_safari"
-                ]
-            }
-        }
-    }
-
-
-    # --------------------------------------------------------
-    # DOWNLOAD
-    # --------------------------------------------------------
 
     try:
 
         print("=" * 60)
-        print("DOWNLOAD START")
+        print("REQUESTING DOWNLOAD FROM WORKER")
         print("=" * 60)
 
         print("VIDEO ID:", video_id)
         print("TITLE:", title)
-        print("URL:", youtube_url)
-
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-
-            ydl.download([
-                youtube_url
-            ])
 
 
-        # ----------------------------------------------------
-        # איתור הקובץ
-        # ----------------------------------------------------
+        response = requests.get(
 
-        files = glob.glob(
-            os.path.join(
-                DOWNLOAD_FOLDER,
-                video_id + ".*"
+            f"{WORKER_URL}/download",
+
+            params={
+                "id": video_id,
+                "title": title
+            },
+
+            timeout=600,
+
+            stream=True
+        )
+
+
+        content_type = (
+            response.headers.get(
+                "Content-Type",
+                ""
             )
         )
 
-        if not files:
 
-            raise Exception(
-                "ההורדה הסתיימה ללא יצירת קובץ."
-            )
+        # ----------------------------------------------------
+        # אם ה-Worker החזיר שגיאה
+        # ----------------------------------------------------
+
+        if response.status_code != 200:
+
+            try:
+
+                data = response.json()
+
+                error_message = data.get(
+                    "error",
+                    "ההורדה נכשלה."
+                )
+
+                error_code = data.get(
+                    "code",
+                    "WORKER-ERROR"
+                )
+
+            except Exception:
+
+                error_message = (
+                    "שרת ההורדה לא הצליח "
+                    "להשלים את הפעולה."
+                )
+
+                error_code = (
+                    f"WORKER-HTTP-{response.status_code}"
+                )
 
 
-        file_path = files[0]
+            return render_template_string(
 
-        extension = os.path.splitext(
-            file_path
-        )[1]
+                ERROR_TEMPLATE,
+
+                error_message=error_message,
+
+                error_code=error_code
+
+            ), 500
+
+
+        # ----------------------------------------------------
+        # קובץ
+        # ----------------------------------------------------
+
+        from flask import Response
+
+        def generate():
+
+            for chunk in response.iter_content(
+                chunk_size=1024 * 1024
+            ):
+
+                if chunk:
+
+                    yield chunk
 
 
         filename = (
-            clean_filename(title)
-            + extension
+            title
+            if title
+            else "song"
+        )
+
+        filename = re.sub(
+            r'[<>:"/\\|?*\x00-\x1F]',
+            '',
+            filename
+        ).strip()
+
+        if not filename:
+
+            filename = "song"
+
+
+        if not filename.lower().endswith(".mp3"):
+
+            filename += ".mp3"
+
+
+        flask_response = Response(
+            generate(),
+            content_type=(
+                content_type
+                or "audio/mpeg"
+            )
         )
 
 
-        print("DOWNLOAD SUCCESS:", file_path)
-
-
-        return send_file(
-            file_path,
-            as_attachment=True,
-            download_name=filename
+        flask_response.headers[
+            "Content-Disposition"
+        ] = (
+            f'attachment; filename="{filename}"'
         )
+
+
+        if response.headers.get(
+            "Content-Length"
+        ):
+
+            flask_response.headers[
+                "Content-Length"
+            ] = response.headers[
+                "Content-Length"
+            ]
+
+
+        return flask_response
+
+
+    except requests.exceptions.Timeout:
+
+        return render_template_string(
+
+            ERROR_TEMPLATE,
+
+            error_message=(
+                "שרת ההורדה לא סיים את "
+                "הפעולה בזמן שהוקצב."
+            ),
+
+            error_code="WORKER-TIMEOUT"
+
+        ), 504
 
 
     except Exception as e:
 
-        # ----------------------------------------------------
-        # שמירת שגיאה
-        # ----------------------------------------------------
-
         print("=" * 60)
-        print("DOWNLOAD ERROR")
+        print("WEB DOWNLOAD ERROR")
         print("=" * 60)
-
-        print("VIDEO ID:", video_id)
-        print("TITLE:", title)
-        print("URL:", youtube_url)
-
-        print("ERROR:")
-        print(str(e))
-
-        print("TRACEBACK:")
 
         traceback.print_exc()
-
-        # ----------------------------------------------------
-        # שליחה לשרת PHP
-        # ----------------------------------------------------
-
-        send_error_to_remote_server(
-            event="youtube_download",
-            error_text=str(e),
-            video_id=video_id,
-            youtube_url=youtube_url,
-            title=title
-        )
-
-        # ----------------------------------------------------
-        # תרגום לעברית
-        # ----------------------------------------------------
-
-        hebrew_message = translate_error_to_hebrew(
-            str(e)
-        )
 
 
         return render_template_string(
 
             ERROR_TEMPLATE,
 
-            error_message=hebrew_message,
+            error_message=(
+                "אירעה שגיאה בתקשורת "
+                "עם שרת ההורדה."
+            ),
 
-            raw_error=str(e),
-
-            error_code="YTDLP-DOWNLOAD"
+            error_code="WORKER-CONNECTION"
 
         ), 500
 
 
 # ============================================================
-# HEALTH CHECK
+# HEALTH
 # ============================================================
 
 @app.route("/health")
@@ -1144,15 +775,7 @@ def health():
 
     return {
         "status": "ok",
-        "service": "music-downloader",
-        "yt_dlp": getattr(
-            yt_dlp.version,
-            "__version__",
-            "unknown"
-        ),
-        "time": datetime.now(
-            timezone.utc
-        ).isoformat()
+        "service": "music-downloader-web"
     }
 
 
@@ -1163,7 +786,11 @@ def health():
 if __name__ == "__main__":
 
     app.run(
+
         host="0.0.0.0",
+
         port=PORT,
+
         debug=False
+
     )
