@@ -1,4 +1,4 @@
 Flask
-yt-dlp==2026.08.19
+yt-dlp[default]
 requests
 static-ffmpeg
