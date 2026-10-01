@@ -16,7 +16,7 @@ app = Flask(__name__)
 PORT = int(
     os.environ.get(
         "PORT",
-        10001
+        "10000"
     )
 )
 
@@ -36,13 +36,13 @@ try:
 except Exception as e:
 
     print(
-        "Warning: static_ffmpeg not loaded:",
+        "Warning: FFmpeg not loaded:",
         e
     )
 
 
 # ============================================================
-# SETTINGS
+# DOWNLOAD FOLDER
 # ============================================================
 
 DOWNLOAD_FOLDER = os.path.abspath(
@@ -56,38 +56,7 @@ os.makedirs(
 
 
 # ============================================================
-# STARTUP
-# ============================================================
-
-print("=" * 60)
-print("DOWNLOAD WORKER STARTING")
-print("=" * 60)
-
-print("PORT:", PORT)
-
-print(
-    "DOWNLOAD FOLDER:",
-    DOWNLOAD_FOLDER
-)
-
-try:
-
-    print(
-        "yt-dlp version:",
-        yt_dlp.version.__version__
-    )
-
-except Exception:
-
-    print(
-        "yt-dlp version: unknown"
-    )
-
-print("=" * 60)
-
-
-# ============================================================
-# CLEAN FILENAME
+# HELPERS
 # ============================================================
 
 def clean_filename(name):
@@ -107,142 +76,76 @@ def clean_filename(name):
     ).strip()
 
     if not name:
-
         name = "song"
 
     return name[:180]
 
 
-# ============================================================
-# ERROR TRANSLATION
-# ============================================================
+def translate_error(error):
 
-def translate_error_to_hebrew(error_text):
-
-    text = str(error_text)
+    text = str(error)
 
     lower = text.lower()
-
-
-    if (
-        "sign in to confirm" in lower
-        or "you're not a bot" in lower
-        or "you’re not a bot" in lower
-        or "confirm you're not a bot" in lower
-    ):
-
-        return (
-            "YouTube דחה את בקשת ההורדה "
-            "ודרש אימות שהבקשה אינה מגיעה "
-            "מרובוט.\n\n"
-            "הבעיה נמצאת בצד שרת המדיה, "
-            "ולא בדפדפן או במחשב שלך."
-        )
-
 
     if (
         "429" in lower
         or "too many requests" in lower
     ):
-
         return (
-            "YouTube החזיר HTTP 429 "
-            "ומגביל את הבקשות מהשרת.\n\n"
-            "כדאי להמתין ולא לשלוח ניסיונות "
-            "חוזרים במהירות."
+            "מקור המדיה הגביל את הבקשה "
+            "והחזיר HTTP 429."
         )
 
+    if (
+        "sign in to confirm" in lower
+        or "you're not a bot" in lower
+        or "you’re not a bot" in lower
+        or "captcha" in lower
+    ):
+        return (
+            "מקור המדיה דורש אימות נוסף "
+            "עבור בקשת ההורדה."
+        )
 
     if "private video" in lower:
-
         return (
-            "הסרטון פרטי ולכן אינו זמין "
-            "להורדה."
+            "הסרטון פרטי ולכן אינו זמין."
         )
-
 
     if (
         "video unavailable" in lower
         or "video removed" in lower
     ):
-
         return (
             "הסרטון אינו זמין כרגע."
         )
 
-
-    if (
-        "not available in your country"
-        in lower
-        or
-        "not available in your region"
-        in lower
-    ):
-
-        return (
-            "הסרטון אינו זמין באזור "
-            "שבו נמצא שרת ההורדה."
-        )
-
-
     if "403" in lower:
-
         return (
             "השרת קיבל HTTP 403 "
             "ממקור המדיה."
         )
 
-
     if "404" in lower:
-
         return (
             "הסרטון לא נמצא."
         )
 
-
-    if (
-        "captcha" in lower
-        or "verification" in lower
-        or "verify you are human" in lower
-    ):
-
-        return (
-            "מקור המדיה דורש אימות אנושי "
-            "לפני שניתן להמשיך."
-        )
-
-
-    if (
-        "requested format is not available"
-        in lower
-    ):
-
-        return (
-            "לא נמצא פורמט שמע מתאים "
-            "עבור הסרטון הזה."
-        )
-
-
     if "ffmpeg" in lower:
-
         return (
-            "אירעה בעיה בעיבוד קובץ המדיה "
+            "אירעה בעיה בעיבוד המדיה "
             "באמצעות FFmpeg."
         )
-
 
     if (
         "timeout" in lower
         or "timed out" in lower
         or "connection reset" in lower
-        or "network" in lower
     ):
-
         return (
-            "אירעה בעיית תקשורת עם "
-            "מקור המדיה."
+            "אירעה בעיית תקשורת "
+            "עם מקור המדיה."
         )
-
 
     return (
         "אירעה שגיאה בזמן הורדת המדיה."
@@ -261,7 +164,6 @@ def search():
         ""
     ).strip()
 
-
     if not query:
 
         return jsonify({
@@ -271,30 +173,18 @@ def search():
 
     try:
 
-        # ----------------------------------------------------
-        # חיפוש רגיל
-        # ----------------------------------------------------
-
         search_query = (
             "ytsearch8:"
             + query
         )
 
-
         ydl_opts = {
-
             "quiet": True,
-
             "no_warnings": True,
-
             "extract_flat": True,
-
             "skip_download": True,
-
             "noplaylist": True
-
         }
-
 
         with yt_dlp.YoutubeDL(
             ydl_opts
@@ -305,9 +195,7 @@ def search():
                 download=False
             )
 
-
         results = []
-
 
         if not info:
 
@@ -315,42 +203,29 @@ def search():
                 "results": []
             })
 
-
-        entries = info.get(
+        for entry in info.get(
             "entries",
             []
-        )
-
-
-        for entry in entries:
+        ):
 
             if not entry:
-
                 continue
 
-
-            video_id = entry.get(
-                "id"
-            )
-
+            video_id = entry.get("id")
 
             if not video_id:
-
                 continue
-
 
             title = (
                 entry.get("title")
                 or "ללא כותרת"
             )
 
-
             artist = (
                 entry.get("channel")
                 or entry.get("uploader")
                 or ""
             )
-
 
             thumbnail = (
                 entry.get("thumbnail")
@@ -359,30 +234,19 @@ def search():
                 f"{video_id}/hqdefault.jpg"
             )
 
-
             results.append({
-
                 "id": video_id,
-
                 "title": title,
-
                 "artist": artist,
-
                 "thumbnail": thumbnail,
-
                 "url":
                     "https://www.youtube.com/watch?v="
                     + video_id
-
             })
 
-
         return jsonify({
-
             "results": results
-
         })
-
 
     except Exception as e:
 
@@ -392,17 +256,10 @@ def search():
 
         traceback.print_exc()
 
-
         return jsonify({
-
-            "results": [],
-
-            "error":
-                translate_error_to_hebrew(e),
-
-            "code":
-                "SEARCH-ERROR"
-
+            "error": translate_error(e),
+            "code": "SEARCH-ERROR",
+            "results": []
         }), 500
 
 
@@ -418,7 +275,6 @@ def download():
         ""
     ).strip()
 
-
     title = request.args.get(
         "title",
         "song"
@@ -428,13 +284,10 @@ def download():
     if not video_id:
 
         return jsonify({
-
             "error":
                 "לא סופק מזהה של הסרטון.",
-
             "code":
                 "MISSING-ID"
-
         }), 400
 
 
@@ -445,23 +298,11 @@ def download():
 
 
     print("=" * 60)
-    print("DOWNLOAD REQUEST")
+    print("DOWNLOAD START")
     print("=" * 60)
 
-    print(
-        "VIDEO ID:",
-        video_id
-    )
-
-    print(
-        "TITLE:",
-        title
-    )
-
-    print(
-        "URL:",
-        youtube_url
-    )
+    print("VIDEO:", video_id)
+    print("TITLE:", title)
 
 
     # ========================================================
@@ -469,42 +310,24 @@ def download():
     # ========================================================
 
     existing_files = glob.glob(
-
         os.path.join(
-
             DOWNLOAD_FOLDER,
-
             video_id + ".*"
-
         )
-
     )
 
 
     if existing_files:
 
-        existing_file = existing_files[0]
-
-
-        print(
-            "USING EXISTING FILE:",
-            existing_file
-        )
-
+        file_path = existing_files[0]
 
         return send_file(
-
-            existing_file,
-
+            file_path,
             as_attachment=True,
-
             download_name=(
                 clean_filename(title)
-                + os.path.splitext(
-                    existing_file
-                )[1]
+                + os.path.splitext(file_path)[1]
             )
-
         )
 
 
@@ -513,12 +336,8 @@ def download():
     # ========================================================
 
     output_template = os.path.join(
-
         DOWNLOAD_FOLDER,
-
-        video_id
-        + ".%(ext)s"
-
+        video_id + ".%(ext)s"
     )
 
 
@@ -543,9 +362,6 @@ def download():
         "no_warnings":
             False,
 
-        "nocheckcertificate":
-            True,
-
         "retries":
             1,
 
@@ -561,7 +377,6 @@ def download():
         "postprocessors": [
 
             {
-
                 "key":
                     "FFmpegExtractAudio",
 
@@ -570,20 +385,13 @@ def download():
 
                 "preferredquality":
                     "192"
-
             }
 
         ]
-
     }
 
 
     try:
-
-        print(
-            "STARTING YT-DLP"
-        )
-
 
         with yt_dlp.YoutubeDL(
             ydl_opts
@@ -595,38 +403,28 @@ def download():
 
 
         # ====================================================
-        # FIND RESULT
+        # FIND FILE
         # ====================================================
 
         files = glob.glob(
-
             os.path.join(
-
                 DOWNLOAD_FOLDER,
-
                 video_id + ".*"
-
             )
-
         )
 
 
         if not files:
 
-            raise Exception(
-                "ההורדה הסתיימה ללא יצירת קובץ."
+            raise RuntimeError(
+                "ההורדה הסתיימה "
+                "אך לא נוצר קובץ."
             )
 
 
-        # מעדיפים MP3
         mp3_files = [
-
             f for f in files
-
-            if f.lower().endswith(
-                ".mp3"
-            )
-
+            if f.lower().endswith(".mp3")
         ]
 
 
@@ -639,14 +437,9 @@ def download():
             file_path = files[0]
 
 
-        extension = os.path.splitext(
-            file_path
-        )[1]
-
-
         filename = (
             clean_filename(title)
-            + extension
+            + os.path.splitext(file_path)[1]
         )
 
 
@@ -657,13 +450,9 @@ def download():
 
 
         return send_file(
-
             file_path,
-
             as_attachment=True,
-
             download_name=filename
-
         )
 
 
@@ -677,48 +466,30 @@ def download():
 
 
         # מחיקת קבצים חלקיים
-        try:
 
-            partial_files = glob.glob(
-
-                os.path.join(
-
-                    DOWNLOAD_FOLDER,
-
-                    video_id + ".*"
-
-                )
-
+        for file_path in glob.glob(
+            os.path.join(
+                DOWNLOAD_FOLDER,
+                video_id + ".*"
             )
+        ):
 
-
-            for file_path in partial_files:
-
-                try:
-
-                    os.remove(
-                        file_path
-                    )
-
-                except Exception:
-
-                    pass
-
-        except Exception:
-
-            pass
+            try:
+                os.remove(file_path)
+            except Exception:
+                pass
 
 
         return jsonify({
 
             "error":
-                translate_error_to_hebrew(e),
+                translate_error(e),
 
             "raw_error":
                 str(e),
 
             "code":
-                "YTDLP-DOWNLOAD"
+                "DOWNLOAD-ERROR"
 
         }), 500
 
@@ -731,20 +502,8 @@ def download():
 def health():
 
     return {
-
-        "status":
-            "ok",
-
-        "service":
-            "music-downloader-worker",
-
-        "yt_dlp":
-            getattr(
-                yt_dlp.version,
-                "__version__",
-                "unknown"
-            )
-
+        "status": "ok",
+        "service": "download-worker"
     }
 
 
@@ -755,11 +514,7 @@ def health():
 if __name__ == "__main__":
 
     app.run(
-
         host="0.0.0.0",
-
         port=PORT,
-
         debug=False
-
     )
