@@ -1,5 +1,4 @@
 Flask
-requests
 static-ffmpeg
 yt-dlp[default]
 yt-dlp-ejs
