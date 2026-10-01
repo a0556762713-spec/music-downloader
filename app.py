@@ -1,4 +1,3 @@
-```python
 import os
 import re
 import traceback
@@ -30,18 +29,22 @@ app = Flask(__name__)
 
 
 # =========================================================
-# הגדרות
+# Downloads folder
 # =========================================================
 
 DOWNLOAD_FOLDER = os.path.abspath("downloads")
 os.makedirs(DOWNLOAD_FOLDER, exist_ok=True)
 
-# כתובת השרת שאליו נשלחות השגיאות
+
+# =========================================================
+# Remote error server
+# =========================================================
+
 ERROR_SERVER_URL = "https://merkazia-plus.wuaze.com/wer.php"
 
 
 # =========================================================
-# שליחת שגיאה לשרת החיצוני
+# Send error to PHP server
 # =========================================================
 
 def send_error_to_remote_server(
@@ -53,9 +56,7 @@ def send_error_to_remote_server(
     traceback_text="",
     extra=None
 ):
-
     try:
-
         payload = {
             "event": event,
             "video_id": video_id,
@@ -68,11 +69,11 @@ def send_error_to_remote_server(
             "extra": extra or {}
         }
 
-        print("")
         print("========================================")
         print("SENDING ERROR TO REMOTE SERVER")
         print("========================================")
         print("URL:", ERROR_SERVER_URL)
+        print("EVENT:", event)
         print("VIDEO ID:", video_id)
         print("TITLE:", title)
         print("ERROR:", error)
@@ -84,747 +85,443 @@ def send_error_to_remote_server(
             timeout=15
         )
 
-        print("")
         print("========================================")
         print("REMOTE SERVER RESPONSE")
         print("========================================")
         print("STATUS:", response.status_code)
         print("RESPONSE:", response.text)
         print("========================================")
-        print("")
 
     except Exception as send_error:
-
-        print("")
         print("========================================")
         print("FAILED TO SEND ERROR TO REMOTE SERVER")
         print("========================================")
         print("ERROR:", str(send_error))
         print("========================================")
-        print("")
 
 
 # =========================================================
-# HTML - עמוד ראשי
+# Main HTML
 # =========================================================
 
 HTML_PAGE = """
 <!DOCTYPE html>
-
 <html lang="he" dir="rtl">
-
 <head>
-
     <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
 
-    <meta
-        name="viewport"
-        content="width=device-width, initial-scale=1.0"
-    >
-
-    <title>
-        דביר מיוזיק - הורדת שירים מיוטיוב
-    </title>
-
+    <title>Music Downloader</title>
 
     <style>
-
         * {
             box-sizing: border-box;
         }
 
         body {
-
-            font-family:
-                Arial,
-                sans-serif;
-
-            background:
-                #f4f4f9;
-
-            padding:
-                20px;
-
-            direction:
-                rtl;
-
-            margin:
-                0;
+            margin: 0;
+            padding: 0;
+            font-family: Arial, sans-serif;
+            background: linear-gradient(135deg, #111827, #1f2937);
+            color: white;
+            min-height: 100vh;
         }
-
 
         .container {
-
-            max-width:
-                800px;
-
-            margin:
-                auto;
-
-            background:
-                white;
-
-            padding:
-                25px;
-
-            border-radius:
-                12px;
-
-            box-shadow:
-                0 4px 10px
-                rgba(0,0,0,0.1);
-
-            text-align:
-                center;
+            width: 95%;
+            max-width: 1100px;
+            margin: auto;
+            padding: 40px 0;
         }
-
 
         h1 {
-
-            margin-top:
-                0;
+            text-align: center;
+            font-size: 42px;
+            margin-bottom: 10px;
         }
 
-
-        form {
-
-            margin-top:
-                20px;
+        .subtitle {
+            text-align: center;
+            color: #cbd5e1;
+            margin-bottom: 35px;
         }
 
-
-        input[type="text"] {
-
-            width:
-                60%;
-
-            padding:
-                12px;
-
-            border:
-                1px solid #ccc;
-
-            border-radius:
-                20px;
-
-            font-size:
-                16px;
-
-            outline:
-                none;
+        .search-box {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 35px;
         }
 
-
-        button {
-
-            padding:
-                12px 25px;
-
-            background:
-                #ffcc00;
-
-            border:
-                none;
-
-            border-radius:
-                20px;
-
-            font-weight:
-                bold;
-
-            cursor:
-                pointer;
-
-            font-size:
-                16px;
+        .search-box input {
+            flex: 1;
+            padding: 17px;
+            border: none;
+            border-radius: 12px;
+            font-size: 18px;
+            outline: none;
         }
 
-
-        button:hover {
-
-            background:
-                #e6b800;
+        .search-box button {
+            padding: 17px 28px;
+            border: none;
+            border-radius: 12px;
+            background: #ef4444;
+            color: white;
+            font-size: 18px;
+            cursor: pointer;
+            font-weight: bold;
         }
 
+        .search-box button:hover {
+            background: #dc2626;
+        }
 
         .results {
-
-            display:
-                grid;
-
-            grid-template-columns:
-                repeat(
-                    auto-fill,
-                    minmax(220px, 1fr)
-                );
-
-            gap:
-                20px;
-
-            margin-top:
-                30px;
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+            gap: 20px;
         }
-
 
         .card {
-
-            border:
-                1px solid #eee;
-
-            padding:
-                15px;
-
-            border-radius:
-                10px;
-
-            background:
-                #fafafa;
-
-            text-align:
-                center;
+            background: rgba(255,255,255,0.08);
+            border: 1px solid rgba(255,255,255,0.1);
+            border-radius: 18px;
+            overflow: hidden;
+            backdrop-filter: blur(10px);
+            transition: 0.2s;
         }
 
-
-        .card img {
-
-            width:
-                100%;
-
-            height:
-                140px;
-
-            object-fit:
-                cover;
-
-            border-radius:
-                8px;
+        .card:hover {
+            transform: translateY(-4px);
         }
 
-
-        .card h4 {
-
-            margin:
-                10px 0 5px 0;
-
-            font-size:
-                15px;
-
-            height:
-                38px;
-
-            overflow:
-                hidden;
+        .thumbnail {
+            width: 100%;
+            aspect-ratio: 16 / 9;
+            object-fit: cover;
+            display: block;
         }
 
-
-        .card p {
-
-            margin:
-                0 0 10px 0;
-
-            color:
-                #666;
-
-            font-size:
-                13px;
+        .card-content {
+            padding: 18px;
         }
 
-
-        .download-btn {
-
-            display:
-                block;
-
-            background:
-                #28a745;
-
-            color:
-                white;
-
-            text-decoration:
-                none;
-
-            padding:
-                10px;
-
-            margin-top:
-                10px;
-
-            border-radius:
-                5px;
-
-            font-weight:
-                bold;
+        .title {
+            font-size: 19px;
+            font-weight: bold;
+            line-height: 1.4;
+            margin-bottom: 8px;
         }
 
-
-        .download-btn:hover {
-
-            background:
-                #218838;
+        .artist {
+            color: #cbd5e1;
+            margin-bottom: 16px;
         }
 
-
-        .info-text {
-
-            font-size:
-                14px;
-
-            color:
-                #666;
-
-            margin-top:
-                15px;
+        .download {
+            display: block;
+            width: 100%;
+            text-align: center;
+            text-decoration: none;
+            background: #22c55e;
+            color: white;
+            padding: 13px;
+            border-radius: 10px;
+            font-weight: bold;
         }
 
-
-        .no-results {
-
-            margin-top:
-                30px;
-
-            color:
-                #777;
+        .download:hover {
+            background: #16a34a;
         }
 
+        .empty {
+            text-align: center;
+            color: #cbd5e1;
+            padding: 40px;
+        }
+
+        @media (max-width: 650px) {
+            h1 {
+                font-size: 32px;
+            }
+
+            .search-box {
+                flex-direction: column;
+            }
+
+            .search-box button {
+                width: 100%;
+            }
+        }
     </style>
-
 </head>
-
 
 <body>
 
-
 <div class="container">
 
+    <h1>🎵 Music Downloader</h1>
 
-    <h1>
-        🎵 דביר מיוזיק - הורדת שירים מיוטיוב
-    </h1>
+    <div class="subtitle">
+        חפש שירים והורד אותם
+    </div>
 
-
-    <form
-        method="GET"
-        action="/"
-    >
-
+    <form class="search-box" method="GET" action="/">
         <input
             type="text"
             name="q"
-            placeholder="הקלד שם שיר או הדבק קישור מיוטיוב..."
             value="{{ search_query }}"
+            placeholder="חפש שיר או הדבק קישור מיוטיוב..."
+            autocomplete="off"
             required
         >
 
-
         <button type="submit">
-            חפש
+            🔍 חיפוש
         </button>
-
     </form>
-
-
-    {% if search_query %}
-
-        <p class="info-text">
-
-            תוצאות חיפוש עבור:
-
-            <strong>
-                {{ search_query }}
-            </strong>
-
-        </p>
-
-    {% endif %}
-
-
-    <div class="results">
-
-        {% for song in results %}
-
-            <div class="card">
-
-                <img
-                    src="{{ song.thumbnail }}"
-                    alt="תמונה"
-                >
-
-
-                <h4>
-                    {{ song.title }}
-                </h4>
-
-
-                <p>
-                    {{ song.artist }}
-                </p>
-
-
-                <a
-                    href="/download?id={{ song.id }}&title={{ song.url_title }}"
-                    class="download-btn"
-                >
-
-                    ⬇ הורד שיר למחשב
-
-                </a>
-
-            </div>
-
-        {% endfor %}
-
-    </div>
-
 
     {% if search_query and not results %}
 
-        <div class="no-results">
+        <div class="empty">
+            ❌ לא נמצאו תוצאות
+        </div>
 
-            ❌ לא נמצאו תוצאות.
+    {% elif results %}
+
+        <div class="results">
+
+            {% for item in results %}
+
+                <div class="card">
+
+                    <img
+                        class="thumbnail"
+                        src="{{ item.thumbnail }}"
+                        alt="thumbnail"
+                    >
+
+                    <div class="card-content">
+
+                        <div class="title">
+                            {{ item.title }}
+                        </div>
+
+                        <div class="artist">
+                            {{ item.artist }}
+                        </div>
+
+                        <a
+                            class="download"
+                            href="/download?id={{ item.id }}&title={{ item.url_title }}"
+                        >
+                            ⬇️ הורדה
+                        </a>
+
+                    </div>
+
+                </div>
+
+            {% endfor %}
 
         </div>
 
     {% endif %}
 
-
 </div>
 
-
 </body>
-
 </html>
 """
 
 
 # =========================================================
-# HTML - שגיאה
+# Error HTML
 # =========================================================
 
 ERROR_TEMPLATE = """
 <!DOCTYPE html>
-
 <html lang="he" dir="rtl">
 
 <head>
-
     <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
 
-    <meta
-        name="viewport"
-        content="width=device-width, initial-scale=1.0"
-    >
-
-    <title>
-        שגיאה בהורדה
-    </title>
-
+    <title>שגיאה בהורדה</title>
 
     <style>
-
         body {
-
-            font-family:
-                Arial,
-                sans-serif;
-
-            background:
-                #fce8e6;
-
-            padding:
-                30px;
-
-            direction:
-                rtl;
-
-            margin:
-                0;
+            margin: 0;
+            padding: 30px;
+            background: #111827;
+            color: white;
+            font-family: Arial, sans-serif;
         }
-
 
         .box {
-
-            background:
-                white;
-
-            padding:
-                25px;
-
-            border-radius:
-                10px;
-
-            max-width:
-                900px;
-
-            margin:
-                auto;
-
-            box-shadow:
-                0 4px 10px
-                rgba(0,0,0,0.1);
+            max-width: 1000px;
+            margin: auto;
+            background: #1f2937;
+            padding: 30px;
+            border-radius: 18px;
         }
 
-
-        h2 {
-
-            color:
-                #d93025;
+        h1 {
+            color: #ef4444;
         }
-
 
         pre {
-
-            background:
-                #2d2d2d;
-
-            color:
-                #f8f8f2;
-
-            padding:
-                15px;
-
-            border-radius:
-                6px;
-
-            overflow-x:
-                auto;
-
-            direction:
-                ltr;
-
-            text-align:
-                left;
-
-            font-size:
-                13px;
-
-            white-space:
-                pre-wrap;
-
-            word-break:
-                break-word;
+            direction: ltr;
+            text-align: left;
+            white-space: pre-wrap;
+            word-break: break-word;
+            background: #000;
+            padding: 20px;
+            border-radius: 12px;
+            overflow-x: auto;
         }
-
 
         a {
-
-            display:
-                inline-block;
-
-            margin-top:
-                15px;
-
-            background:
-                #007bff;
-
-            color:
-                white;
-
-            padding:
-                10px 20px;
-
-            border-radius:
-                5px;
-
-            text-decoration:
-                none;
+            display: inline-block;
+            margin-top: 20px;
+            background: #3b82f6;
+            color: white;
+            text-decoration: none;
+            padding: 12px 20px;
+            border-radius: 10px;
         }
-
     </style>
-
 </head>
-
 
 <body>
 
-
 <div class="box">
 
-
-    <h2>
-        ❌ אירעה שגיאה בעת ניסיון ההורדה מיוטיוב
-    </h2>
-
+    <h1>❌ אירעה שגיאה בהורדה</h1>
 
     <p>
-        להלן פירוט השגיאה המדויק מהשרת:
+        פרטי השגיאה:
     </p>
-
 
     <pre>{{ error_details }}</pre>
 
-
     <a href="/">
-        חזרה לעמוד הראשי
+        ← חזרה לחיפוש
     </a>
-
 
 </div>
 
-
 </body>
-
 </html>
 """
 
 
 # =========================================================
-# חיפוש YouTube
+# YouTube search
 # =========================================================
 
 def search_youtube(query):
 
     ydl_opts = {
-
-        "extract_flat":
-            True,
-
-        "quiet":
-            True,
-
-        "no_warnings":
-            True
+        "extract_flat": True,
+        "quiet": True,
+        "no_warnings": True
     }
 
-
     results = []
-
 
     try:
 
         target = query.strip()
 
-
-        # אם המשתמש לא הדביק קישור,
-        # מבצעים חיפוש
-
         if not (
             "youtube.com" in target
-            or
-            "youtu.be" in target
+            or "youtu.be" in target
         ):
-
             target = f"ytsearch8:{target}"
 
+        print("SEARCHING:", target)
 
-        with yt_dlp.YoutubeDL(
-            ydl_opts
-        ) as ydl:
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
 
             info = ydl.extract_info(
                 target,
                 download=False
             )
 
-
-        if "entries" in info:
-
-            entries = info.get(
-                "entries",
-                []
-            )
-
-        else:
-
-            entries = [info]
-
+        entries = (
+            info.get("entries", [])
+            if "entries" in info
+            else [info]
+        )
 
         for entry in entries:
 
             if not entry:
                 continue
 
-
             video_id = entry.get("id")
-
 
             if not video_id:
                 continue
-
 
             title = entry.get(
                 "title",
                 "שיר"
             )
 
-
             clean_title = re.sub(
                 r"[^\w\s\d\-_~.-]",
                 "",
                 title
-            )
-
-
-            if not clean_title:
-                clean_title = "song"
-
+            ) or "song"
 
             results.append({
-
-                "id":
-                    video_id,
-
-                "title":
-                    title,
-
-                "artist":
+                "id": video_id,
+                "title": title,
+                "artist": (
                     entry.get("uploader")
-                    or
-                    entry.get("channel")
-                    or
-                    "יוטיוב",
-
-                "thumbnail":
-                    f"https://i.ytimg.com/vi/{video_id}/hqdefault.jpg",
-
-                "url_title":
-                    clean_title
+                    or entry.get("channel")
+                    or "יוטיוב"
+                ),
+                "thumbnail": (
+                    f"https://i.ytimg.com/vi/"
+                    f"{video_id}/hqdefault.jpg"
+                ),
+                "url_title": clean_title
             })
 
+        print("SEARCH RESULTS:", len(results))
 
     except Exception as e:
 
         full_error = traceback.format_exc()
 
-
-        print("")
         print("========================================")
         print("SEARCH ERROR")
         print("========================================")
         print(full_error)
         print("========================================")
 
-
         send_error_to_remote_server(
-
             event="youtube_search_error",
-
             error=str(e),
-
             traceback_text=full_error,
-
             extra={
-
-                "query":
-                    query,
-
-                "user_agent":
-                    request.headers.get(
-                        "User-Agent",
-                        ""
-                    ),
-
-                "host":
-                    request.host
+                "query": query,
+                "user_agent": request.headers.get(
+                    "User-Agent",
+                    ""
+                ),
+                "host": request.host
             }
         )
-
 
     return results
 
 
 # =========================================================
-# עמוד הבית
+# Home
 # =========================================================
 
 @app.route("/")
@@ -835,44 +532,32 @@ def home():
         ""
     ).strip()
 
-
-    results = []
-
-
-    if query:
-
-        results = search_youtube(
-            query
-        )
-
+    results = (
+        search_youtube(query)
+        if query
+        else []
+    )
 
     return render_template_string(
-
         HTML_PAGE,
-
         search_query=query,
-
         results=results
     )
 
 
 # =========================================================
-# הורדת שיר
+# Download
 # =========================================================
 
 @app.route("/download")
 def download():
 
-    video_id = request.args.get(
-        "id"
-    )
-
+    video_id = request.args.get("id")
 
     title = request.args.get(
         "title",
         "song"
     )
-
 
     if not video_id:
 
@@ -881,188 +566,147 @@ def download():
             400
         )
 
-
     clean_title = re.sub(
         r"[^\w\s\d\-_~.-]",
         "",
         title
-    )
+    ) or "song"
 
-
-    if not clean_title:
-
-        clean_title = "song"
-
-
-    url = (
+    youtube_url = (
         f"https://www.youtube.com/watch?v={video_id}"
     )
 
-
-    # =====================================================
-    # בדיקה האם הקובץ כבר קיים
-    # =====================================================
+    # -----------------------------------------------------
+    # Check existing file
+    # -----------------------------------------------------
 
     existing_files = glob.glob(
-
         os.path.join(
             DOWNLOAD_FOLDER,
             f"{video_id}.*"
         )
     )
 
-
     if existing_files:
 
         filepath = existing_files[0]
-
 
         ext = filepath.rsplit(
             ".",
             1
         )[-1]
 
-
-        return send_file(
-
-            filepath,
-
-            as_attachment=True,
-
-            download_name=
-                f"{clean_title}.{ext}"
+        print(
+            "USING EXISTING FILE:",
+            filepath
         )
 
+        return send_file(
+            filepath,
+            as_attachment=True,
+            download_name=f"{clean_title}.{ext}"
+        )
 
-    # =====================================================
-    # הגדרות yt-dlp
-    # =====================================================
+    # -----------------------------------------------------
+    # yt-dlp settings
+    # -----------------------------------------------------
 
     ydl_opts = {
 
-        "format":
-            "bestaudio/best",
+        "format": "bestaudio/best",
 
-        "outtmpl":
-            os.path.join(
-                DOWNLOAD_FOLDER,
-                f"{video_id}.%(ext)s"
-            ),
+        "outtmpl": os.path.join(
+            DOWNLOAD_FOLDER,
+            f"{video_id}.%(ext)s"
+        ),
 
-        "nocheckcertificate":
-            True,
+        "nocheckcertificate": True,
 
-        "noplaylist":
-            True,
+        "noplaylist": True,
 
-        "quiet":
-            True,
+        "quiet": True,
 
-        "no_warnings":
-            True
+        "no_warnings": True
     }
 
-
-    # =====================================================
-    # ניסיון הורדה
-    # =====================================================
+    # -----------------------------------------------------
+    # Download
+    # -----------------------------------------------------
 
     try:
 
-        print("")
         print("========================================")
         print("STARTING DOWNLOAD")
         print("========================================")
         print("VIDEO ID:", video_id)
-        print("URL:", url)
+        print("URL:", youtube_url)
         print("TITLE:", clean_title)
         print("========================================")
 
-
-        with yt_dlp.YoutubeDL(
-            ydl_opts
-        ) as ydl:
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
 
             ydl.download([
-                url
+                youtube_url
             ])
 
-
-        # =================================================
-        # בדיקת הקובץ
-        # =================================================
+        # -------------------------------------------------
+        # Find downloaded file
+        # -------------------------------------------------
 
         downloaded = glob.glob(
-
             os.path.join(
                 DOWNLOAD_FOLDER,
                 f"{video_id}.*"
             )
         )
 
-
         if downloaded:
 
             filepath = downloaded[0]
-
 
             ext = filepath.rsplit(
                 ".",
                 1
             )[-1]
 
-
-            print("")
             print("DOWNLOAD SUCCESS")
             print("FILE:", filepath)
-            print("")
-
 
             return send_file(
-
                 filepath,
-
                 as_attachment=True,
-
-                download_name=
-                    f"{clean_title}.{ext}"
+                download_name=f"{clean_title}.{ext}"
             )
-
 
         else:
 
             raise Exception(
-                "ההורדה הסתיימה אך הקובץ "
-                "לא נמצא בתיקיית downloads."
+                "ההורדה הסתיימה אך הקובץ לא נמצא "
+                "בתיקיית downloads."
             )
-
-
-    # =====================================================
-    # טיפול בשגיאה
-    # =====================================================
 
     except Exception as e:
 
         full_error = traceback.format_exc()
 
+        # -------------------------------------------------
+        # Print error to Render
+        # -------------------------------------------------
 
-        print("")
         print("========================================")
         print("DOWNLOAD ERROR")
         print("========================================")
         print("VIDEO ID:", video_id)
-        print("URL:", url)
+        print("URL:", youtube_url)
         print("TITLE:", clean_title)
         print("ERROR:", str(e))
         print("")
         print(full_error)
         print("========================================")
-        print("")
 
-
-        # =================================================
-        # שליחת השגיאה ל־wer.php
-        # =================================================
+        # -------------------------------------------------
+        # Send error to PHP server
+        # -------------------------------------------------
 
         send_error_to_remote_server(
 
@@ -1070,7 +714,7 @@ def download():
 
             video_id=video_id,
 
-            youtube_url=url,
+            youtube_url=youtube_url,
 
             title=clean_title,
 
@@ -1080,62 +724,57 @@ def download():
 
             extra={
 
-                "request_args":
-                    dict(request.args),
+                "request_args": dict(
+                    request.args
+                ),
 
-                "user_agent":
-                    request.headers.get(
-                        "User-Agent",
-                        ""
-                    ),
+                "user_agent": request.headers.get(
+                    "User-Agent",
+                    ""
+                ),
 
-                "host":
-                    request.host
+                "host": request.host
             }
         )
 
-
-        # =================================================
-        # הצגת השגיאה למשתמש
-        # =================================================
+        # -------------------------------------------------
+        # Show error to user
+        # -------------------------------------------------
 
         return render_template_string(
-
             ERROR_TEMPLATE,
-
             error_details=full_error
-
         ), 500
 
 
 # =========================================================
-# הפעלת השרת
+# Start server
 # =========================================================
 
 if __name__ == "__main__":
 
     port = int(
-
         os.environ.get(
             "PORT",
             7860
         )
     )
 
-
-    print("")
     print("========================================")
     print("SERVER STARTING")
-    print("PORT:", port)
-    print("ERROR SERVER:", ERROR_SERVER_URL)
     print("========================================")
-    print("")
-
+    print("PORT:", port)
+    print(
+        "ERROR SERVER:",
+        ERROR_SERVER_URL
+    )
+    print(
+        "DOWNLOAD FOLDER:",
+        DOWNLOAD_FOLDER
+    )
+    print("========================================")
 
     app.run(
-
         host="0.0.0.0",
-
         port=port
     )
-```
