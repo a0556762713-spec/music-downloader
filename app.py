@@ -1,183 +1,156 @@
 import os
 import re
-import requests
-
-from flask import (
-    Flask,
-    request,
-    render_template_string,
-    Response
-)
+import glob
+from flask import Flask, request, render_template_string, send_file
+import yt_dlp
+import static_ffmpeg
 
 app = Flask(__name__)
 
-PORT = int(os.environ.get("PORT", "10000"))
+DOWNLOAD_FOLDER = os.path.abspath("downloads")
+os.makedirs(DOWNLOAD_FOLDER, exist_ok=True)
 
-# כתובת ה-Worker תוגדר ב-Render כ-Environment Variable
-WORKER_URL = os.environ.get("WORKER_URL", "").rstrip("/")
+# טוען FFmpeg
+static_ffmpeg.add_paths()
 
 
-# ============================================================
-# HTML
-# ============================================================
+def clean_filename(name):
+    name = re.sub(r'[\\/*?:"<>|]', "", name)
+    name = re.sub(r"\s+", " ", name).strip()
+    return name[:180] or "song"
 
-HTML_PAGE = r"""
+
+def translate_error(error):
+    text = str(error)
+
+    if "Sign in to confirm" in text or "not a bot" in text:
+        return "YouTube חסם את הבקשה מהשרת. נסה שוב מאוחר יותר."
+
+    if "429" in text or "Too Many Requests" in text:
+        return "YouTube הגביל זמנית את הבקשות מהשרת."
+
+    if "Video unavailable" in text:
+        return "הסרטון אינו זמין."
+
+    if "Private video" in text:
+        return "זהו סרטון פרטי."
+
+    return "אירעה שגיאה בהורדה."
+
+
+def search_youtube(query):
+    options = {
+        "quiet": True,
+        "no_warnings": True,
+        "extract_flat": True,
+        "skip_download": True,
+        "noplaylist": True,
+    }
+
+    with yt_dlp.YoutubeDL(options) as ydl:
+        result = ydl.extract_info(
+            f"ytsearch8:{query}",
+            download=False
+        )
+
+    videos = []
+
+    for item in result.get("entries", []):
+        if not item:
+            continue
+
+        video_id = item.get("id")
+        title = item.get("title", "ללא שם")
+
+        if video_id:
+            videos.append({
+                "id": video_id,
+                "title": title,
+                "url": f"https://www.youtube.com/watch?v={video_id}"
+            })
+
+    return videos
+
+
+HTML = """
 <!DOCTYPE html>
 <html lang="he" dir="rtl">
-
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-
-<title>מוריד שירים</title>
+<title>הורדת שירים מיוטיוב</title>
 
 <style>
-* {
-    box-sizing: border-box;
-}
-
 body {
     margin: 0;
-    min-height: 100vh;
     font-family: Arial, sans-serif;
-    background: linear-gradient(135deg, #111827, #1f2937);
+    background: #111;
     color: white;
 }
 
 .container {
-    width: min(1000px, 94%);
-    margin: auto;
-    padding: 45px 0;
+    max-width: 850px;
+    margin: 60px auto;
+    padding: 20px;
 }
 
-.header {
+h1 {
     text-align: center;
-    margin-bottom: 35px;
 }
 
-.header h1 {
-    font-size: 42px;
-    margin: 0 0 10px;
-}
-
-.header p {
-    color: #cbd5e1;
-    font-size: 18px;
-}
-
-.search-box {
+.search {
     display: flex;
     gap: 10px;
-    margin-bottom: 35px;
+    margin: 30px 0;
 }
 
-.search-box input {
+input {
     flex: 1;
-    padding: 17px;
-    border: none;
-    border-radius: 12px;
-    font-size: 17px;
-}
-
-.search-box button {
-    padding: 17px 30px;
-    border: none;
-    border-radius: 12px;
-    background: #ef4444;
-    color: white;
-    font-size: 17px;
-    font-weight: bold;
-    cursor: pointer;
-}
-
-.search-box button:hover {
-    background: #dc2626;
-}
-
-.results {
-    display: grid;
-    gap: 15px;
-}
-
-.card {
-    background: rgba(255,255,255,0.08);
-    border: 1px solid rgba(255,255,255,0.1);
-    border-radius: 16px;
     padding: 15px;
-    display: flex;
-    gap: 18px;
-    align-items: center;
-}
-
-.card img {
-    width: 190px;
-    height: 108px;
-    object-fit: cover;
     border-radius: 10px;
+    border: none;
+    font-size: 17px;
 }
 
-.card-info {
-    flex: 1;
+button {
+    padding: 15px 25px;
+    border: none;
+    border-radius: 10px;
+    background: #e00;
+    color: white;
+    cursor: pointer;
+    font-size: 16px;
 }
 
-.card-title {
-    font-size: 20px;
-    font-weight: bold;
-    margin-bottom: 8px;
+.result {
+    background: #222;
+    padding: 18px;
+    border-radius: 12px;
+    margin-bottom: 12px;
 }
 
-.artist {
-    color: #cbd5e1;
-    margin-bottom: 15px;
+.title {
+    font-size: 18px;
+    margin-bottom: 12px;
 }
 
 .download {
     display: inline-block;
-    background: #22c55e;
+    background: #168a3a;
     color: white;
+    padding: 10px 18px;
+    border-radius: 8px;
     text-decoration: none;
-    padding: 11px 20px;
-    border-radius: 9px;
-    font-weight: bold;
 }
 
-.download:hover {
-    background: #16a34a;
-}
-
-.empty {
-    text-align: center;
-    color: #cbd5e1;
-    padding: 40px;
-}
-
-.error {
-    background: #7f1d1d;
-    border: 1px solid #ef4444;
-    padding: 20px;
-    border-radius: 12px;
-    white-space: pre-line;
-    line-height: 1.7;
-}
-
-@media (max-width: 650px) {
-    .search-box {
-        flex-direction: column;
-    }
-
-    .card {
-        flex-direction: column;
-        align-items: stretch;
-    }
-
-    .card img {
-        width: 100%;
-        height: auto;
-    }
-
-    .header h1 {
-        font-size: 30px;
-    }
+.youtube {
+    display: inline-block;
+    margin-right: 8px;
+    background: #333;
+    color: white;
+    padding: 10px 18px;
+    border-radius: 8px;
+    text-decoration: none;
 }
 </style>
 </head>
@@ -186,73 +159,51 @@ body {
 
 <div class="container">
 
-    <div class="header">
-        <h1>🎵 מוריד שירים</h1>
-        <p>חפש שיר והורד אותו כקובץ שמע</p>
+<h1>🎵 הורדת שירים מיוטיוב</h1>
+
+<form class="search" method="GET">
+    <input
+        type="text"
+        name="q"
+        placeholder="חפש שיר או אמן..."
+        value="{{ query }}"
+        required
+    >
+    <button type="submit">חיפוש</button>
+</form>
+
+{% if error %}
+<div class="result">
+    ❌ {{ error }}
+</div>
+{% endif %}
+
+{% for video in videos %}
+
+<div class="result">
+
+    <div class="title">
+        {{ video.title }}
     </div>
 
-    <form class="search-box" method="GET" action="/">
-        <input
-            type="text"
-            name="q"
-            value="{{ query }}"
-            placeholder="כתוב שם של שיר..."
-            autocomplete="off"
-        >
+    <a
+        class="download"
+        href="/download?id={{ video.id }}&title={{ video.title|urlencode }}"
+    >
+        ⬇️ הורד MP3
+    </a>
 
-        <button type="submit">
-            🔍 חיפוש
-        </button>
-    </form>
+    <a
+        class="youtube"
+        href="{{ video.url }}"
+        target="_blank"
+    >
+        ▶️ YouTube
+    </a>
 
-    {% if error_message %}
-        <div class="error">
-            {{ error_message }}
-        </div>
-        <br>
-    {% endif %}
+</div>
 
-    {% if query and not results and not error_message %}
-        <div class="empty">
-            לא נמצאו תוצאות.
-        </div>
-    {% endif %}
-
-    <div class="results">
-
-        {% for item in results %}
-
-        <div class="card">
-
-            <img
-                src="{{ item.thumbnail }}"
-                alt=""
-            >
-
-            <div class="card-info">
-
-                <div class="card-title">
-                    {{ item.title }}
-                </div>
-
-                <div class="artist">
-                    {{ item.artist }}
-                </div>
-
-                <a
-                    class="download"
-                    href="/download?id={{ item.id }}&title={{ item.title|urlencode }}"
-                >
-                    ⬇ הורד
-                </a>
-
-            </div>
-
-        </div>
-
-        {% endfor %}
-
-    </div>
+{% endfor %}
 
 </div>
 
@@ -260,293 +211,113 @@ body {
 </html>
 """
 
-
-# ============================================================
-# ERROR PAGE
-# ============================================================
-
-ERROR_PAGE = r"""
-<!DOCTYPE html>
-<html lang="he" dir="rtl">
-
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-
-<title>שגיאה</title>
-
-<style>
-body {
-    margin: 0;
-    padding: 30px;
-    background: #111827;
-    color: white;
-    font-family: Arial, sans-serif;
-}
-
-.box {
-    max-width: 800px;
-    margin: 50px auto;
-    background: #1f2937;
-    padding: 30px;
-    border-radius: 18px;
-}
-
-.message {
-    background: #111827;
-    padding: 20px;
-    border-radius: 12px;
-    white-space: pre-line;
-    line-height: 1.8;
-}
-
-.back {
-    display: inline-block;
-    margin-top: 25px;
-    padding: 12px 20px;
-    background: #3b82f6;
-    color: white;
-    text-decoration: none;
-    border-radius: 10px;
-}
-</style>
-
-</head>
-
-<body>
-
-<div class="box">
-
-<h1>❌ הפעולה נכשלה</h1>
-
-<div class="message">
-{{ message }}
-</div>
-
-<a class="back" href="/">
-← חזרה לחיפוש
-</a>
-
-</div>
-
-</body>
-</html>
-"""
-
-
-# ============================================================
-# SEARCH
-# ============================================================
-
-def search_youtube(query):
-
-    if not WORKER_URL:
-        raise RuntimeError(
-            "WORKER_URL לא הוגדר בשרת."
-        )
-
-    response = requests.get(
-        f"{WORKER_URL}/search",
-        params={"q": query},
-        timeout=60
-    )
-
-    try:
-        data = response.json()
-    except Exception:
-        raise RuntimeError(
-            "שרת ההורדה החזיר תשובה לא תקינה."
-        )
-
-    if response.status_code != 200:
-        raise RuntimeError(
-            data.get(
-                "error",
-                "החיפוש נכשל."
-            )
-        )
-
-    return data.get("results", [])
-
-
-# ============================================================
-# HOME
-# ============================================================
 
 @app.route("/")
 def home():
-
-    query = request.args.get(
-        "q",
-        ""
-    ).strip()
-
-    results = []
-    error_message = ""
+    query = request.args.get("q", "").strip()
+    videos = []
+    error = None
 
     if query:
-
         try:
-            results = search_youtube(query)
-
+            videos = search_youtube(query)
         except Exception as e:
-            error_message = str(e)
+            error = translate_error(e)
 
     return render_template_string(
-        HTML_PAGE,
+        HTML,
         query=query,
-        results=results,
-        error_message=error_message
+        videos=videos,
+        error=error
     )
 
 
-# ============================================================
-# DOWNLOAD
-# ============================================================
-
 @app.route("/download")
 def download():
-
-    video_id = request.args.get(
-        "id",
-        ""
-    ).strip()
-
-    title = request.args.get(
-        "title",
-        "song"
-    ).strip()
+    video_id = request.args.get("id", "").strip()
+    title = request.args.get("title", "song").strip()
 
     if not video_id:
+        return "חסר מזהה סרטון", 400
 
-        return render_template_string(
-            ERROR_PAGE,
-            message="לא סופק מזהה של הסרטון."
-        ), 400
+    filename = clean_filename(title)
 
-    if not WORKER_URL:
+    output_template = os.path.join(
+        DOWNLOAD_FOLDER,
+        filename + ".%(ext)s"
+    )
 
-        return render_template_string(
-            ERROR_PAGE,
-            message="WORKER_URL לא הוגדר בשרת."
-        ), 500
+    options = {
+        "format": "bestaudio/best",
+        "outtmpl": output_template,
+        "noplaylist": True,
+        "quiet": False,
+        "no_warnings": False,
+        "retries": 1,
+        "fragment_retries": 1,
+        "socket_timeout": 30,
+
+        "postprocessors": [{
+            "key": "FFmpegExtractAudio",
+            "preferredcodec": "mp3",
+            "preferredquality": "192",
+        }],
+    }
 
     try:
+        url = f"https://www.youtube.com/watch?v={video_id}"
 
-        response = requests.get(
-            f"{WORKER_URL}/download",
-            params={
-                "id": video_id,
-                "title": title
-            },
-            timeout=600,
-            stream=True
+        with yt_dlp.YoutubeDL(options) as ydl:
+            ydl.download([url])
+
+        files = glob.glob(
+            os.path.join(DOWNLOAD_FOLDER, filename + ".*")
         )
 
-        # Worker החזיר שגיאה
-        if response.status_code != 200:
+        mp3_files = [
+            f for f in files
+            if f.lower().endswith(".mp3")
+        ]
 
-            try:
-                data = response.json()
-
-                message = data.get(
-                    "error",
-                    "ההורדה נכשלה."
-                )
-
-            except Exception:
-                message = (
-                    "שרת ההורדה החזיר שגיאה."
-                )
-
-            return render_template_string(
-                ERROR_PAGE,
-                message=message
-            ), response.status_code
-
-        # ----------------------------------------------------
-        # החזרת הקובץ למשתמש
-        # ----------------------------------------------------
-
-        filename = re.sub(
-            r'[<>:"/\\|?*\x00-\x1F]',
-            '',
-            title
-        ).strip()
-
-        if not filename:
-            filename = "song"
-
-        if not filename.lower().endswith(".mp3"):
-            filename += ".mp3"
-
-        def generate():
-
-            for chunk in response.iter_content(
-                chunk_size=1024 * 1024
-            ):
-
-                if chunk:
-                    yield chunk
-
-        result = Response(
-            generate(),
-            content_type=response.headers.get(
-                "Content-Type",
-                "audio/mpeg"
+        if mp3_files:
+            return send_file(
+                mp3_files[0],
+                as_attachment=True,
+                download_name=filename + ".mp3"
             )
-        )
 
-        result.headers[
-            "Content-Disposition"
-        ] = (
-            f'attachment; filename="{filename}"'
-        )
-
-        return result
-
-    except requests.exceptions.Timeout:
-
-        return render_template_string(
-            ERROR_PAGE,
-            message=(
-                "שרת ההורדה לא סיים את הפעולה "
-                "בזמן שהוקצב."
+        if files:
+            return send_file(
+                files[0],
+                as_attachment=True,
+                download_name=os.path.basename(files[0])
             )
-        ), 504
 
-    except Exception:
+        return "הקובץ לא נוצר", 500
 
-        return render_template_string(
-            ERROR_PAGE,
-            message=(
-                "לא ניתן להתחבר כרגע "
-                "לשרת ההורדה."
-            )
-        ), 500
+    except Exception as e:
+        return f"""
+        <html lang="he" dir="rtl">
+        <body style="font-family:Arial;padding:40px">
+            <h2>❌ ההורדה נכשלה</h2>
+            <p>{translate_error(e)}</p>
+            <hr>
+            <small>{str(e)}</small>
+        </body>
+        </html>
+        """, 500
 
-
-# ============================================================
-# HEALTH
-# ============================================================
 
 @app.route("/health")
 def health():
-
     return {
-        "status": "ok",
-        "service": "web"
+        "status": "ok"
     }
 
 
-# ============================================================
-# RUN
-# ============================================================
-
 if __name__ == "__main__":
-
+    port = int(os.environ.get("PORT", 10000))
     app.run(
         host="0.0.0.0",
-        port=PORT,
-        debug=False
+        port=port
     )
